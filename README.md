@@ -11,14 +11,26 @@ While it isn't strictly necessary, I've also added volume to the fly machine.
 ## Usage
 
 ### Prerequisites
-
 You'll need to have an S3-compatible store to connect to. Please see the [Litestream Guides](https://litestream.io/guides/) to get set up on your preferred object store.
+Once you have credentials, store them in an environment file called `.auth.env` with the following contents.
+```
+LITESTREAM_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxx
+LITESTREAM_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+REPLICA_URL="s3://YOUR_S3_BUCKET_NAME/db"
+```
 
 ## Local Development
-
 Since this is using PocketBase as a Go framework, you can run this locally with `go run main.go serve --http "localhost:8080"`
-
 You will want to do this to not use your Litestream backed up DB in development.
+
+If you do want to use litestream and connect to your production database, then you can do that like this...
+```
+# BEWARE!
+# You should only have one application server running at a time or you may corrupt your database!
+mkdir -p pb_data
+docker build -t pocketbase-litestream .
+docker run --env-file .auth.env -p 8080:8080 -v pb_data:/usr/local/bin/pb_data/ pocketbase-litestream
+```
 
 ## Deploying to Fly.io
 
