@@ -1,6 +1,6 @@
 # fly.toml file generated for easy copying into your project
 
-app = "pocketbase-framework-lightstream"
+app = "tf-pocketbase"
 kill_signal = "SIGINT"
 kill_timeout = 5
 
