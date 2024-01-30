@@ -1,10 +1,12 @@
 # PocketBase & Litestream Example
 
-This repo is a starting spot to use PocketBase as a framework with custom Go code that is backed up and restored via Litestream.
+This repo is a starting spot to use PocketBase as a framework with Go that is backed up and restored via Litestream.
 
 ## Why does this exist?
 
-I think that PocketBase is an amazing project that can accomplish 99% of what a side-hustle, POC, and even startup needs. However, when using as a framework, we need to be able update code without needing to manually back up the DB file. I wanted to deploy my code in a container to [Fly.io](https://fly.io), [GCP Cloud Run](https://cloud.google.com/run), or [AWS App Runner](https://aws.amazon.com/apprunner/) but still utilize the magic of Litestream. This repo allows you to copy/paste the starting files to do just that.
+PocketBase is an amazing project that can accomplish 99% of what a side-hustle, POC, and even startup needs. However, when using as a framework, we need to be able update code without needing to manually back up the DB file. I wanted to deploy my code in a container to [Fly.io](https://fly.io) but still utilize the magic of Litestream. This repo allows you to copy/paste the starting files to do just that.
+
+While it isn't strictly necessary, I've also added volume to the fly machine.
 
 ## Usage
 
@@ -18,22 +20,31 @@ Since this is using PocketBase as a Go framework, you can run this locally with 
 
 You will want to do this to not use your Litestream backed up DB in development.
 
-## Deploying to production
+## Deploying to Fly.io
 
-### Cavitate
-
-You'll notice that in this repo, the Dockerfile has these 3 `env` variables hard-coded
-
-```docker
-ENV LITESTREAM_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxx
-ENV LITESTREAM_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-ENV REPLICA_URL="s3://YOUR_S3_BUCKET_NAME/db"
+First, ensure that you have a `.auth.env` file with the following variables:
+```
+LITESTREAM_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxx
+LITESTREAM_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+REPLICA_URL="s3://YOUR_S3_BUCKET_NAME/db"
 ```
 
-This is just for ease of deployment to get your container running in the cloud of your choice. You can deploy directly as-is if you want to keep the `ENV` variables in the Dockerfile.
+Next, publish your environment file to Fly.io.
+```bash
+cat .auth.env | fly secrets import
+```
 
-However, if you want to replace the 3 hardcoded `ENV` variables in the Dockerfile, you can in a few ways.
+Finally, deploy to Fly.io
+```
+fly deploy --local-only
+```
 
-1. For Fly.io you can use the `[env]` block in the `fly.toml`. [Reference page](https://fly.io/docs/languages-and-frameworks/dockerfile/#config-first).
-2. For Google Cloud Run, you can set environment variables for your container See [this page on configuration info](https://cloud.google.com/run/docs/configuring/environment-variables).
-3. For AWS App runner see [this page on configuring ENVs](https://docs.aws.amazon.com/apprunner/latest/dg/manage-configure.html) for your continer.
+## Restoring from a backup
+First, make sure you have litestream installed locally.
+Next, reconstruct the replica and poke around with sqlite3.
+```
+./do 'litestream restore -o db.sqlite $REPLICA_URL'
+
+# Poke around
+sqlite3 db.sqlite
+```
