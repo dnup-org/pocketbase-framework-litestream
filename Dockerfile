@@ -1,4 +1,4 @@
-FROM golang:1.21.5
+FROM golang:1.22.2
 
 WORKDIR /usr/src/app
 
@@ -6,8 +6,9 @@ WORKDIR /usr/src/app
 COPY go.mod go.sum main.go ./
 
 # Build the binary
+COPY handler /usr/src/app/handler
 RUN go mod download && go mod verify
-RUN go build -v -o /usr/local/bin/app ./...
+RUN go build -v -o /usr/local/bin/app
 
 # Copy public files
 COPY pb_public /usr/local/bin/pb_public

@@ -18,6 +18,6 @@ kill_timeout = 5
   force_https = true
 
   # scale to zero (~500ms cold start)
-  auto_stop_machines = true
-  auto_start_machines = true
-  min_machines_running = 0
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
