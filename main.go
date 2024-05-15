@@ -68,14 +68,14 @@ func main() {
 		return nil
 	})
 
-	app.OnRecordBeforeCreateRequest("workspaces").Add(func(e *core.RecordCreateEvent) error {
+	app.OnRecordBeforeCreateRequest("relays").Add(func(e *core.RecordCreateEvent) error {
 		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
 		if admin != nil {
 			return nil // ignore for admins
 		}
 
 		user_record := e.HttpContext.Get(apis.ContextRequestInfoKey).(*models.RequestInfo).AuthRecord
-		workspace_roles_collection, err := app.Dao().FindCollectionByNameOrId("workspace_roles")
+		relay_roles_collection, err := app.Dao().FindCollectionByNameOrId("relay_roles")
 		if err != nil {
 			return err
 		}
@@ -87,14 +87,14 @@ func main() {
 		var total int
 
 		// The transaction has started, so expect to find the current record in the count.
-		err = app.Dao().RecordQuery(workspace_roles_collection).
+		err = app.Dao().RecordQuery(relay_roles_collection).
 			Select("count(*)").
 			AndWhere(dbx.HashExp{"role": owner_role.Id}).
 			AndWhere(dbx.HashExp{"user": user_record.Id}).
 			Row(&total)
 
 		if err != nil || total >= 25 {
-			return echo.NewHTTPError(http.StatusForbidden, fmt.Errorf("you can only be an Owner of 25 workspaces"))
+			return echo.NewHTTPError(http.StatusForbidden, fmt.Errorf("you can only be an Owner of 25 relays"))
 		}
 
 		// Set Defaults
@@ -102,13 +102,13 @@ func main() {
 		return nil
 	})
 
-	app.OnRecordBeforeCreateRequest("workspace_roles").Add(func(e *core.RecordCreateEvent) error {
+	app.OnRecordBeforeCreateRequest("relay_roles").Add(func(e *core.RecordCreateEvent) error {
 		//admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
 		//if admin != nil {
 		//	return nil // ignore for admins
 		//}
 		user_record := e.HttpContext.Get(apis.ContextRequestInfoKey).(*models.RequestInfo).AuthRecord
-		workspace, err := app.Dao().FindFirstRecordByData("workspaces", "id", e.Record.GetString("workspace"))
+		relay, err := app.Dao().FindFirstRecordByData("relays", "id", e.Record.GetString("relay"))
 		if err != nil {
 			return err
 		}
@@ -118,19 +118,19 @@ func main() {
 		// The transaction has started, so expect to find the current record in the count.
 		err = app.Dao().RecordQuery(e.Record.Collection()).
 			Select("count(*)").
-			AndWhere(dbx.HashExp{"workspace": e.Record.GetString("workspace")}).
+			AndWhere(dbx.HashExp{"relay": e.Record.GetString("relay")}).
 			AndWhere(dbx.HashExp{"user": user_record.Id}).
 			Row(&total)
 
-		if err != nil || total >= workspace.GetInt("user_limit") {
-			return echo.NewHTTPError(http.StatusForbidden, fmt.Errorf("you have exceeded the user limit for this workspace"))
+		if err != nil || total >= relay.GetInt("user_limit") {
+			return echo.NewHTTPError(http.StatusForbidden, fmt.Errorf("you have exceeded the user limit for this relay"))
 		}
 
 		return nil
 	})
 
-	app.OnRecordAfterCreateRequest("workspaces").Add(func(e *core.RecordCreateEvent) error {
-		// Create a workspace_role such that the creator of the workspace is now the owner.
+	app.OnRecordAfterCreateRequest("relays").Add(func(e *core.RecordCreateEvent) error {
+		// Create a relay_role such that the creator of the relay is now the owner.
 		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
 		if admin != nil {
 			return nil // ignore for admins
@@ -142,17 +142,17 @@ func main() {
 			return fmt.Errorf("error finding role: %v", err)
 		}
 
-		workspace_roles_collection, err := app.Dao().FindCollectionByNameOrId("workspace_roles")
+		relay_roles_collection, err := app.Dao().FindCollectionByNameOrId("relay_roles")
 		if err != nil {
 			return err
 		}
 
-		workspace_role := models.NewRecord(workspace_roles_collection)
-		workspace_role.Set("workspace", e.Record.Id)
-		workspace_role.Set("user", user_record.Id)
-		workspace_role.Set("role", owner_role.Id)
+		relay_role := models.NewRecord(relay_roles_collection)
+		relay_role.Set("relay", e.Record.Id)
+		relay_role.Set("user", user_record.Id)
+		relay_role.Set("role", owner_role.Id)
 
-		if err := app.Dao().SaveRecord(workspace_role); err != nil {
+		if err := app.Dao().SaveRecord(relay_role); err != nil {
 			return err
 		}
 
