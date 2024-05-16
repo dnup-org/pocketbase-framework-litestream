@@ -1,0 +1,3 @@
+framework is in go, but acceptance tests are in python using pytest.
+you need to do "make run" before you can run pytest.
+you need to make a virtualenv before you can run pytest.
