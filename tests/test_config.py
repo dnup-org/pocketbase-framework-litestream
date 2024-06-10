@@ -9,6 +9,9 @@ base_url = "https://tf-pocketbase.fly.dev"
 base_url = "http://localhost:8080"
 
 
+EXPIRED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb2xsZWN0aW9uSWQiOiJfcGJfdXNlcnNfYXV0aF8iLCJleHAiOjE3MTU2NDI3NjAsImlkIjoiYzVuOXhoMDg2OXptZnZ0IiwidHlwZSI6ImF1dGhSZWNvcmQifQ.7DeCQ2hlhLIug_gcX8ViAWRMQkqkD9uvMFN8pAt2lYA"
+
+
 def path_get(obj, path, default=None):
     # take obj, and expand.openai_apikey.key
     if obj is None:
@@ -69,9 +72,14 @@ def admin_session():
 
 
 @pytest.fixture
-def user_session(admin_session):
+def user_auth_record(admin_session):
     resp = admin_session.post(f"{base_url}/impersonate", json={"email": "kavanagh.daniel@gmail.com"})
-    auth_token = resp.json()['token']
+    return resp.json()
+
+
+@pytest.fixture
+def user_session(user_auth_record):
+    auth_token = user_auth_record["token"]
     unverified_claims = jwt.decode(auth_token, options={"verify_signature": False})
     print(unverified_claims)
     session = requests.Session()
@@ -121,6 +129,31 @@ def test_admin_session(admin_session, user):
     d = jp(resp)
     assert resp.status_code == 200
     assert path_get(d, "expand.user_settings_via_user.expand.openai_apikey.key")
+
+
+def test_authn(admin_session, user_auth_record):
+    user_token = user_auth_record["token"]
+    resp = admin_session.post(f"{base_url}/authn", json={"token": user_token})
+    resp.raise_for_status()
+    d = jp(resp)
+    path = "record.email"
+    assert path_get(d, path) == path_get(user_auth_record, path)
+
+
+def test_authn_as_user(user_session, user_auth_record):
+    user_token = user_auth_record["token"]
+    resp = user_session.post(f"{base_url}/authn", json={"token": user_token})
+    assert resp.status_code == 401
+
+
+def test_authn_invalid_token(admin_session):
+    resp = admin_session.post(f"{base_url}/authn", json={"token": ""})
+    assert resp.status_code == 400
+
+
+def test_authn_expired_token(admin_session):
+    resp = admin_session.post(f"{base_url}/authn", json={"token": EXPIRED_TOKEN})
+    assert resp.status_code == 400
 
 
 def test_user_read_self(user_session, user):
