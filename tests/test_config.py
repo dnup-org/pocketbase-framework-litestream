@@ -3,9 +3,26 @@ import jwt
 import requests
 import pytest
 from requests import HTTPError
+import os
 
 base_url = "https://tf-pocketbase.fly.dev"
 base_url = "http://localhost:8080"
+
+
+def path_get(obj, path, default=None):
+    # take obj, and expand.openai_apikey.key
+    if obj is None:
+        return default
+    if not path:
+        return obj
+    split = path.split(".")
+    key = split[0]
+    try:
+        subobj = obj.get(key)
+    except AttributeError:
+        return default
+    return path_get(subobj, ".".join(split[1:]), default)
+
 
 
 def expect(s):
@@ -31,14 +48,18 @@ def member_role():
 
 @pytest.fixture
 def admin_session():
+    identity = os.environ.get("POCKETBASE_ADMIN_USER")
+    pw = os.environ.get("POCKETBASE_ADMIN_PASSWORD")
+    print(identity)
+    print(pw)
     resp = requests.post(f"{base_url}/api/admins/auth-with-password", json={
-        "identity": "me@danielgk.com",
-        "password": "3m=3)g;+*.iR7K]"
+        "identity": identity,
+        "password": pw
     })
     resp.raise_for_status()
     auth_token = resp.json()['token']
     unverified_claims = jwt.decode(auth_token, options={"verify_signature": False})
-    #print(unverified_claims)
+    print(unverified_claims)
     session = requests.Session()
     session.headers = {
         "Authorization": f"Bearer {auth_token[:]}"
@@ -48,11 +69,11 @@ def admin_session():
 
 
 @pytest.fixture
-def user_session():
-    # FIXME find a way to get this so it doesn't expire
-    auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb2xsZWN0aW9uSWQiOiJfcGJfdXNlcnNfYXV0aF8iLCJleHAiOjE3MTY4NTczMTMsImlkIjoiYzVuOXhoMDg2OXptZnZ0IiwidHlwZSI6ImF1dGhSZWNvcmQifQ.GCb4Jqy9tMLwHQkAwBsbqx-wxM4tlOXYefJm37jGWII"
+def user_session(admin_session):
+    resp = admin_session.post(f"{base_url}/impersonate", json={"email": "kavanagh.daniel@gmail.com"})
+    auth_token = resp.json()['token']
     unverified_claims = jwt.decode(auth_token, options={"verify_signature": False})
-    #print(unverified_claims)
+    print(unverified_claims)
     session = requests.Session()
     session.headers = {
         "Authorization": f"Bearer {auth_token[:]}"
@@ -78,7 +99,8 @@ def stranger():
 
 @pytest.fixture
 def relay(user_session):
-    resp = user_session.post(f"{base_url}/api/collections/relays/records/", json={"name": "Another Relay"})
+    resp = user_session.post(f"{base_url}/api/collections/relays/records/", json={"name": "Another Relay", "guid": "9c5b15dd-a2b5-472b-bfc4-0656fcbf668f", "path": None})
+    resp.raise_for_status()
     relay_id = resp.json()["id"]
     yield relay_id
     resp = user_session.delete(f"{base_url}/api/collections/relays/records/{relay_id}")
@@ -95,19 +117,18 @@ def relay_with_member(user_session, relay, member, member_role):
  
 
 def test_admin_session(admin_session, user):
-    resp = admin_session.get(f"{base_url}/api/collections/users/records/{user}?expand=openai_apikey,anthropic_apikey,subscriptions_via_user")
+    resp = admin_session.get(f"{base_url}/api/collections/users/records/{user}?expand=user_settings_via_user.openai_apikey,user_settings_via_user.anthropic_apikey,subscriptions_via_user")
     d = jp(resp)
     assert resp.status_code == 200
+    assert path_get(d, "expand.user_settings_via_user.expand.openai_apikey.key")
 
 
 def test_user_read_self(user_session, user):
     expect("we can access ourselves, but not join on keys")
-    resp = user_session.get(f"{base_url}/api/collections/users/records/{user}?expand=openai_apikey,anthropic_apikey,subscriptions_via_user")
+    resp = user_session.get(f"{base_url}/api/collections/users/records/{user}?expand=user_settings_via_user.openai_apikey,user_settings_via_user.anthropic_apikey,subscriptions_via_user")
     d = jp(resp)
     assert resp.status_code == 200
-    assert "openai_apikey" not in d["expand"]
-    assert "anthropic_apikey" not in d["expand"]
-
+    assert "user_settings" not in d["expand"]
 
 def test_user_read_other(user_session, stranger):
     expect("we can't access other guy")
@@ -121,6 +142,7 @@ def test_user_create_get_and_delete_relay(user_session, user):
     expect("we can create a relay")
     resp = user_session.post(f"{base_url}/api/collections/relays/records/", json={"name": "Another Relay"})
     jp(resp)
+    resp.raise_for_status()
     relay = resp.json()['id']
     assert resp.status_code == 200
     expect("we can view the relay")
@@ -155,6 +177,7 @@ def test_owner_add_member(user_session, relay, member, member_role):
     resp = user_session.post(f"{base_url}/api/collections/relay_roles/records/", json=new_relay_role)
     jp(resp)
     expect("can get role")
+    resp.raise_for_status()
     relay_role = resp.json()['id']
     resp = user_session.get(f"{base_url}/api/collections/relay_roles/records/{relay_role}")
     jp(resp)
