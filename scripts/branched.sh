@@ -8,8 +8,8 @@ echo "Branching from Production"
 if [ -f /usr/local/bin/pb_data/data.db ]; then
   echo "Database already exists, skipping restore"
 else
-  echo "No database found, restoring from replica if exists"
+  echo "No database found, restoring from replica at ${REPLICA_URL}"
   litestream restore -v -if-replica-exists -o /usr/local/bin/pb_data/data.db "${REPLICA_URL}"
 fi
 
-exec /usr/local/bin/app serve --http 0.0.0.0:8080
+exec /usr/local/bin/app --hooksDir=/usr/local/bin/pb_hooks --dev serve --http 0.0.0.0:8080

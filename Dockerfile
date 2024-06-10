@@ -14,9 +14,6 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     go build -v -o /usr/local/bin/app
 
-# Copy public files
-COPY pb_public /usr/local/bin/pb_public
-
 # Set ENVs
 # These should be set via an env files
 # Locally you can run docker with --env-file
@@ -29,6 +26,12 @@ ENV REPLICA_URL="s3://YOUR_S3_BUCKET_NAME/db"
 # This is done in the builder and copied as the chmod doubles the size.
 ADD https://github.com/benbjohnson/litestream/releases/download/v0.3.9/litestream-v0.3.9-linux-amd64-static.tar.gz /tmp/litestream.tar.gz
 RUN tar -C /usr/local/bin -xzf /tmp/litestream.tar.gz
+
+# Copy public files
+COPY pb_public /usr/local/bin/pb_public
+
+# Copy js runtime
+COPY pb_hooks /usr/local/bin/pb_hooks
 
 # Notify Docker that the container wants to expose a port.
 # Pocketbase serve port
