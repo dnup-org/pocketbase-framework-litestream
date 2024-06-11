@@ -78,8 +78,26 @@ def user_auth_record(admin_session):
 
 
 @pytest.fixture
+def other_user_auth_record(admin_session):
+    resp = admin_session.post(f"{base_url}/impersonate", json={"email": "matt@noinstructions.ai"})
+    return resp.json()
+
+
+@pytest.fixture
 def user_session(user_auth_record):
     auth_token = user_auth_record["token"]
+    unverified_claims = jwt.decode(auth_token, options={"verify_signature": False})
+    print(unverified_claims)
+    session = requests.Session()
+    session.headers = {
+        "Authorization": f"Bearer {auth_token[:]}"
+    }
+    return session
+
+
+@pytest.fixture
+def other_user_session(other_user_auth_record):
+    auth_token = other_user_auth_record["token"]
     unverified_claims = jwt.decode(auth_token, options={"verify_signature": False})
     print(unverified_claims)
     session = requests.Session()
@@ -235,3 +253,26 @@ def test_owner_view_strangers(user_session, stranger):
     resp = user_session.get(f"{base_url}/api/collections/users/records/{stranger}")
     jp(resp)
     assert resp.status_code == 404
+
+
+def test_accepting_invite(relay, user_session, other_user_session):
+    resp = user_session.get(f"{base_url}/api/collections/relay_invitations/records/")
+    jp(resp)
+    for invitation in resp.json()["items"]:
+        print(invitation)
+        if invitation["relay"] == relay:
+            break
+    else:
+        assert False
+    key = invitation["key"]
+    print(key)
+
+    resp = other_user_session.get(f"{base_url}/api/collections/relays/records/{relay}")
+    assert resp.status_code == 404
+
+    resp = other_user_session.post(f"{base_url}/api/accept-invitation", json={"key": key})
+    jp(resp)
+
+    resp = other_user_session.get(f"{base_url}/api/collections/relays/records/{relay}")
+    assert resp.status_code == 200
+

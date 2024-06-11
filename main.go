@@ -7,16 +7,18 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/labstack/echo/v5"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/plugins/jsvm"
 	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/plugins/jsvm"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/tjarratt/babble"
 )
 
 func init() {
@@ -29,6 +31,8 @@ func main() {
 
 	app = pocketbase.New()
 	appHandler := &handler.AppHandler{App: app}
+	babbler := babble.NewBabbler()
+	babbler.Count = 3
 
 	var hooksDir string
 	app.RootCmd.PersistentFlags().StringVar(
@@ -54,7 +58,7 @@ func main() {
 		"the total prewarm goja.Runtime instances for the JS app hooks execution",
 	)
 
-    var migrationsDir string
+	var migrationsDir string
 	app.RootCmd.PersistentFlags().StringVar(
 		&migrationsDir,
 		"migrationsDir",
@@ -70,9 +74,9 @@ func main() {
 		"enable/disable auto migrations",
 	)
 
-    app.RootCmd.ParseFlags(os.Args[1:])
+	app.RootCmd.ParseFlags(os.Args[1:])
 
-    // load jsvm (hooks and migrations)
+	// load jsvm (hooks and migrations)
 	jsvm.MustRegister(app, jsvm.Config{
 		MigrationsDir: migrationsDir,
 		HooksDir:      hooksDir,
@@ -114,6 +118,36 @@ func main() {
 		// System Statistics
 		e.Router.GET("/stats/cpu", getCPUStats)
 		e.Router.GET("/stats/ram", getRAMStats)
+
+		e.Router.POST("/api/accept-invitation", func(c echo.Context) error {
+			info := apis.RequestInfo(c)
+			user_record := info.AuthRecord
+
+			data := struct {
+				Key string `json:"key" form:"key"`
+			}{}
+			if err := c.Bind(&data); err != nil {
+				return apis.NewBadRequestError("Failed to read request data", err)
+			}
+
+			invitation, err := app.Dao().FindFirstRecordByData("relay_invitations", "key", data.Key)
+			if err != nil {
+				return err
+			}
+
+			relay_roles_collection, err := app.Dao().FindCollectionByNameOrId("relay_roles")
+			if err != nil {
+				return err
+			}
+			relay_role := models.NewRecord(relay_roles_collection)
+			relay_role.Set("relay", invitation.Get("relay"))
+			relay_role.Set("role", invitation.Get("role"))
+			relay_role.Set("user", user_record.Id)
+			if err := app.Dao().SaveRecord(relay_role); err != nil {
+				return err
+			}
+			return c.JSON(http.StatusOK, map[string]string{"message": "ok"})
+		}, handler.AuthGuard)
 
 		return nil
 	})
@@ -203,6 +237,41 @@ func main() {
 		relay_role.Set("role", owner_role.Id)
 
 		if err := app.Dao().SaveRecord(relay_role); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	app.OnRecordAfterCreateRequest("relays").Add(func(e *core.RecordCreateEvent) error {
+		// Create a relay_role such that the creator of the relay is now the owner.
+		//admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		//if admin != nil {
+		//	return nil // ignore for admins
+		//}
+
+		member_role, err := app.Dao().FindFirstRecordByData("roles", "name", "Member")
+		if err != nil {
+			return fmt.Errorf("error finding role: %v", err)
+		}
+
+		relay_invitations_collection, err := app.Dao().FindCollectionByNameOrId("relay_invitations")
+		if err != nil {
+			return err
+		}
+
+		relay_invitation := models.NewRecord(relay_invitations_collection)
+		relay_invitation.Set("relay", e.Record.Id)
+		relay_invitation.Set("role", member_role.Id)
+
+		key := babbler.Babble()
+		key = strings.Replace(key, "'s", "", -1)
+		key = strings.Replace(key, "'", "", -1)
+		key = strings.ToLower(key)
+
+		relay_invitation.Set("key", key)
+
+		if err := app.Dao().SaveRecord(relay_invitation); err != nil {
 			return err
 		}
 
