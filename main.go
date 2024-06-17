@@ -139,14 +139,30 @@ func main() {
 			if err != nil {
 				return err
 			}
-			relay_role := models.NewRecord(relay_roles_collection)
-			relay_role.Set("relay", invitation.Get("relay"))
-			relay_role.Set("role", invitation.Get("role"))
-			relay_role.Set("user", user_record.Id)
-			if err := app.Dao().SaveRecord(relay_role); err != nil {
+
+			var total int
+			err = app.Dao().RecordQuery(relay_roles_collection).
+				Select("count(*)").
+				AndWhere(dbx.HashExp{"relay": invitation.GetString("relay")}).
+				AndWhere(dbx.HashExp{"role": invitation.GetString("role")}).
+				AndWhere(dbx.HashExp{"user": user_record.Id}).
+				Row(&total)
+
+			if err != nil || total == 0 {
+				relay_role := models.NewRecord(relay_roles_collection)
+				relay_role.Set("relay", invitation.Get("relay"))
+				relay_role.Set("role", invitation.Get("role"))
+				relay_role.Set("user", user_record.Id)
+				if err := app.Dao().SaveRecord(relay_role); err != nil {
+					return err
+				}
+			}
+			relay, err := app.Dao().FindRecordById("relays", invitation.GetString("relay"))
+			if err != nil {
 				return err
 			}
-			return c.JSON(http.StatusOK, map[string]string{"message": "ok"})
+
+			return c.JSON(http.StatusOK, relay)
 		}, handler.AuthGuard)
 
 		return nil
@@ -183,14 +199,15 @@ func main() {
 
 		// Set Defaults
 		e.Record.Set("user_limit", 2)
+		e.Record.Set("creator", user_record.Id)
 		return nil
 	})
 
 	app.OnRecordBeforeCreateRequest("relay_roles").Add(func(e *core.RecordCreateEvent) error {
-		//admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
-		//if admin != nil {
-		//	return nil // ignore for admins
-		//}
+		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		if admin != nil {
+			return nil // ignore for admins
+		}
 		user_record := e.HttpContext.Get(apis.ContextRequestInfoKey).(*models.RequestInfo).AuthRecord
 		relay, err := app.Dao().FindFirstRecordByData("relays", "id", e.Record.GetString("relay"))
 		if err != nil {
@@ -245,10 +262,10 @@ func main() {
 
 	app.OnRecordAfterCreateRequest("relays").Add(func(e *core.RecordCreateEvent) error {
 		// Create a relay_role such that the creator of the relay is now the owner.
-		//admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
-		//if admin != nil {
-		//	return nil // ignore for admins
-		//}
+		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		if admin != nil {
+			return nil // ignore for admins
+		}
 
 		member_role, err := app.Dao().FindFirstRecordByData("roles", "name", "Member")
 		if err != nil {

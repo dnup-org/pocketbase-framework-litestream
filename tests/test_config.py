@@ -272,7 +272,14 @@ def test_accepting_invite(relay, user_session, other_user_session):
 
     resp = other_user_session.post(f"{base_url}/api/accept-invitation", json={"key": key})
     jp(resp)
+    assert resp.json()["id"] == relay
+    assert resp.status_code == 200
 
     resp = other_user_session.get(f"{base_url}/api/collections/relays/records/{relay}")
+    assert resp.status_code == 200
+
+    # accept it again
+    resp = other_user_session.post(f"{base_url}/api/accept-invitation", json={"key": key})
+    jp(resp)
     assert resp.status_code == 200
 
