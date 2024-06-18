@@ -3,6 +3,7 @@ package main
 
 import (
 	"backend/handler"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,6 +21,11 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/tjarratt/babble"
 )
+
+type OAuthResponse struct {
+	Name    string `json:"name"`
+	Picture string `json:"picture"`
+}
 
 func init() {
 	handler.SetupHandlerVars()
@@ -165,6 +171,29 @@ func main() {
 			return c.JSON(http.StatusOK, relay)
 		}, handler.AuthGuard)
 
+		return nil
+	})
+
+	app.OnRecordBeforeCreateRequest("oauth2_response").Add(func(e *core.RecordCreateEvent) error {
+		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		if admin != nil {
+			return nil // ignore for admins
+		}
+		user_record := e.HttpContext.Get(apis.ContextRequestInfoKey).(*models.RequestInfo).AuthRecord
+
+		var oauth_response OAuthResponse
+		oauth_response_string := e.Record.GetString("oauth_response")
+		err := json.Unmarshal([]byte(oauth_response_string), &oauth_response)
+		if err != nil {
+			return err
+		}
+
+		user_record.Set("name", oauth_response.Name)
+		user_record.Set("picture", oauth_response.Picture)
+
+		if err := app.Dao().SaveRecord(user_record); err != nil {
+			return err
+		}
 		return nil
 	})
 

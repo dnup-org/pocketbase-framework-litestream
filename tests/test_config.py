@@ -283,3 +283,25 @@ def test_accepting_invite(relay, user_session, other_user_session):
     jp(resp)
     assert resp.status_code == 200
 
+
+def test_oauth_data(user_auth_record, user_session):
+    picture = "https://i1.sndcdn.com/artworks-000045449137-fcbrrr-t500x500.jpg"
+    print(user_auth_record)
+    user = user_auth_record["record"]
+    resp = user_session.post(
+        f"{base_url}/api/collections/oauth2_response/records",
+        json={
+            "user": user['id'],
+            "oauth_response": {
+                "name": "Strong Bad",
+                "picture": picture
+            }
+        }
+    )
+    jp(resp)
+    assert resp.status_code == 200
+    resp = user_session.get(
+        f"{base_url}/api/collections/users/records/{user['id']}"
+    )
+    assert resp.json()["name"] == "Strong Bad"
+    assert resp.json()["picture"] == picture
