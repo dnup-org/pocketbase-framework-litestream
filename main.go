@@ -167,7 +167,12 @@ func main() {
 			if err != nil {
 				return err
 			}
-
+			if errs := app.Dao().ExpandRecord(relay, []string{"relay_roles_via_relay"}, nil); len(errs) > 0 {
+				return fmt.Errorf("failed to expand: %v", errs)
+			}
+			if errs := app.Dao().ExpandRecord(relay, []string{"shared_folders_via_relay"}, nil); len(errs) > 0 {
+				return fmt.Errorf("failed to expand: %v", errs)
+			}
 			return c.JSON(http.StatusOK, relay)
 		}, handler.AuthGuard)
 

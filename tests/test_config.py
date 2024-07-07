@@ -124,12 +124,17 @@ def stranger():
 
 
 @pytest.fixture
-def relay(user_session):
+def relay(user_session, user):
     resp = user_session.post(f"{base_url}/api/collections/relays/records/", json={"name": "Another Relay", "guid": "9c5b15dd-a2b5-472b-bfc4-0656fcbf668f", "path": None})
     resp.raise_for_status()
     relay_id = resp.json()["id"]
+    resp = user_session.post(f"{base_url}/api/collections/shared_folders/records/", json={"relay": relay_id, "name": "Another Folder", "guid": "9c5b15dd-a2b5-472b-bfc4-0656fggf668f", "private": False, "creator": user})
+    resp.raise_for_status()
+    print(resp.json())
+    folder_id = resp.json()["id"]
     yield relay_id
     resp = user_session.delete(f"{base_url}/api/collections/relays/records/{relay_id}")
+    resp = user_session.delete(f"{base_url}/api/collections/shared_folders/records/{folder_id}")
 
 
 @pytest.fixture
@@ -274,6 +279,8 @@ def test_accepting_invite(relay, user_session, other_user_session):
     jp(resp)
     assert resp.json()["id"] == relay
     assert resp.status_code == 200
+    assert resp.json()["expand"]["relay_roles_via_relay"]
+    assert resp.json()["expand"]["shared_folders_via_relay"]
 
     resp = other_user_session.get(f"{base_url}/api/collections/relays/records/{relay}")
     assert resp.status_code == 200
