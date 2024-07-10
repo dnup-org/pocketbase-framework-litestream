@@ -15,6 +15,7 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/forms"
 	"github.com/pocketbase/pocketbase/models"
 	"github.com/pocketbase/pocketbase/plugins/jsvm"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -156,10 +157,14 @@ func main() {
 
 			if err != nil || total == 0 {
 				relay_role := models.NewRecord(relay_roles_collection)
-				relay_role.Set("relay", invitation.Get("relay"))
-				relay_role.Set("role", invitation.Get("role"))
-				relay_role.Set("user", user_record.Id)
-				if err := app.Dao().SaveRecord(relay_role); err != nil {
+				form := forms.NewRecordUpsert(app, relay_role)
+
+				form.LoadData(map[string]any{
+					"relay": invitation.Get("relay"),
+					"role":  invitation.Get("role"),
+					"user":  user_record.Id,
+				})
+				if err := form.Submit(); err != nil {
 					return err
 				}
 			}
@@ -167,12 +172,10 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if errs := app.Dao().ExpandRecord(relay, []string{"relay_roles_via_relay"}, nil); len(errs) > 0 {
+			if errs := app.Dao().ExpandRecord(relay, []string{"relay_roles_via_relay.user", "shared_folders_via_relay"}, nil); len(errs) > 0 {
 				return fmt.Errorf("failed to expand: %v", errs)
 			}
-			if errs := app.Dao().ExpandRecord(relay, []string{"shared_folders_via_relay"}, nil); len(errs) > 0 {
-				return fmt.Errorf("failed to expand: %v", errs)
-			}
+
 			return c.JSON(http.StatusOK, relay)
 		}, handler.AuthGuard)
 

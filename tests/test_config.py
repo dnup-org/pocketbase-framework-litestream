@@ -280,6 +280,7 @@ def test_accepting_invite(relay, user_session, other_user_session):
     assert resp.json()["id"] == relay
     assert resp.status_code == 200
     assert resp.json()["expand"]["relay_roles_via_relay"]
+    assert resp.json()["expand"]["relay_roles_via_relay"][0]["expand"]["user"]["name"]
     assert resp.json()["expand"]["shared_folders_via_relay"]
 
     resp = other_user_session.get(f"{base_url}/api/collections/relays/records/{relay}")
