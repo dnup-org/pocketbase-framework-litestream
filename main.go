@@ -10,7 +10,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/labstack/echo/v5"
+	"io"
+	"strconv"
+
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
@@ -21,6 +23,12 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/tjarratt/babble"
+
+	"github.com/labstack/echo/v5"
+
+	"github.com/stripe/stripe-go/v76"
+	"github.com/stripe/stripe-go/v76/subscription"
+	"github.com/stripe/stripe-go/v76/webhook"
 )
 
 type OAuthResponse struct {
@@ -28,8 +36,15 @@ type OAuthResponse struct {
 	Picture string `json:"picture"`
 }
 
+var STRIPE_WEBHOOK_SECRET string
+var DOMAIN_NAME string
+
+const FREE_USER_LIMIT = 3
+
 func init() {
-	handler.SetupHandlerVars()
+	STRIPE_WEBHOOK_SECRET = os.Getenv("STRIPE_WEBHOOK_SECRET")
+	DOMAIN_NAME = os.Getenv("DOMAIN_NAME")
+	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
 }
 
 var app *pocketbase.PocketBase
@@ -96,9 +111,8 @@ func main() {
 		// Load auth state from cookie
 		e.Router.Use(appHandler.LoadAuthContextFromCookie())
 
-		// Stripe endpoints
-		e.Router.GET("/checkout", appHandler.CheckoutHandler, handler.AuthGuard)
-		e.Router.POST("/webhook", appHandler.WebhookHandler)
+		e.Router.POST("/webhook", WebhookHandler)
+		e.Router.POST("/api/cancel-subscription", handleCancelSubscription, handler.AuthGuard)
 
 		// Pay protected files
 		e.Router.GET("/content/:file", func(c echo.Context) error {
@@ -235,16 +249,12 @@ func main() {
 		}
 
 		// Set Defaults
-		e.Record.Set("user_limit", 2)
+		e.Record.Set("user_limit", FREE_USER_LIMIT)
 		e.Record.Set("creator", user_record.Id)
 		return nil
 	})
 
 	app.OnRecordBeforeCreateRequest("relay_roles").Add(func(e *core.RecordCreateEvent) error {
-		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
-		if admin != nil {
-			return nil // ignore for admins
-		}
 		user_record := e.HttpContext.Get(apis.ContextRequestInfoKey).(*models.RequestInfo).AuthRecord
 		relay, err := app.Dao().FindFirstRecordByData("relays", "id", e.Record.GetString("relay"))
 		if err != nil {
@@ -260,7 +270,7 @@ func main() {
 			AndWhere(dbx.HashExp{"user": user_record.Id}).
 			Row(&total)
 
-		if err != nil || total >= relay.GetInt("user_limit") {
+		if err != nil || total > relay.GetInt("user_limit") {
 			return echo.NewHTTPError(http.StatusForbidden, fmt.Errorf("you have exceeded the user limit for this relay"))
 		}
 
@@ -332,6 +342,19 @@ func main() {
 		return nil
 	})
 
+	app.OnRecordBeforeDeleteRequest("relays").Add(func(e *core.RecordDeleteEvent) error {
+		// Check if there's an active subscription for this relay
+		subscription, err := app.Dao().FindFirstRecordByFilter("subscriptions", "relay={:relay} && active=true", dbx.Params{
+			"relay": e.Record.Id,
+		})
+
+		if err == nil && subscription != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Errorf("cannot delete relay with active subscription"))
+		}
+
+		return nil
+	})
+
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
 	}
@@ -354,4 +377,138 @@ func getRAMStats(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.String(http.StatusOK, fmt.Sprintf("%.2f%%", vmStat.UsedPercent))
+}
+
+func WebhookHandler(c echo.Context) error {
+	const maxBytes = int64(65536)
+	limitedReader := http.MaxBytesReader(c.Response().Writer, c.Request().Body, maxBytes)
+
+	payload, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return err
+	}
+
+	event, err := webhook.ConstructEvent(payload, c.Request().Header.Get("Stripe-Signature"), STRIPE_WEBHOOK_SECRET)
+	if err != nil {
+		return err
+	}
+
+	if event.Type == "checkout.session.completed" {
+		// Successful payment. Retrieve user by email and update paid status in database.
+		metadata, _ := event.Data.Object["metadata"].(map[string]interface{})
+		email, _ := metadata["email"].(string)
+		relay_id, _ := metadata["relay"].(string)
+		quantity_string, _ := metadata["quantity"].(string)
+		quantity, _ := strconv.Atoi(quantity_string)
+		relay, err := app.Dao().FindRecordById("relays", relay_id)
+		if err != nil {
+			return err
+		}
+
+		relay.Set("user_limit", quantity)
+		if err := app.App.Dao().SaveRecord(relay); err != nil {
+			return err
+		}
+		user, err := app.App.Dao().FindAuthRecordByEmail("users", email)
+		if err != nil {
+			user.Set("paid", true)
+			if err := app.App.Dao().SaveRecord(user); err != nil {
+				return err
+			}
+		}
+
+		subcriptions_collection, err := app.Dao().FindCollectionByNameOrId("subscriptions")
+		if err != nil {
+			return err
+		}
+		record := models.NewRecord(subcriptions_collection)
+		record.Set("active", true)
+		record.Set("user", user.Id)
+		record.Set("relay", relay.Id)
+		record.Set("stripe_quantity", quantity)
+		record.Set("stripe_customer", event.Data.Object["customer"])
+		record.Set("stripe_subscription", event.Data.Object["subscription"])
+		app.Dao().SaveRecord(record)
+	} else if event.Type == "customer.subscription.updated" {
+		subscription, err := app.Dao().FindFirstRecordByData("subscriptions", "stripe_subscription", event.Data.Object["id"])
+		if err != nil {
+			return err
+		}
+		subscription.Set("active", event.Data.Object["status"] == "active")
+		subscription.Set("stripe_cancel_at", event.Data.Object["cancel_at"])
+		subscription.Set("stripe_quantity", event.Data.Object["quantity"])
+		if err := app.Dao().SaveRecord(subscription); err != nil {
+			return err
+		}
+		relayId := subscription.GetString("relay")
+		relay, err := app.Dao().FindRecordById("relays", relayId)
+		if err != nil {
+			return err
+		}
+		relay.Set("user_limit", event.Data.Object["quantity"])
+		if err := app.Dao().SaveRecord(relay); err != nil {
+			return err
+		}
+	} else if event.Type == "customer.subscription.deleted" {
+		subscription, err := app.Dao().FindFirstRecordByData("subscriptions", "stripe_subscription", event.Data.Object["id"])
+		if err != nil {
+			return err
+		}
+		relayId := subscription.GetString("relay")
+		if err := app.Dao().DeleteRecord(subscription); err != nil {
+			return err
+		}
+		relay, err := app.Dao().FindRecordById("relays", relayId)
+		if err != nil {
+			return err
+		}
+		relay.Set("user_limit", FREE_USER_LIMIT)
+		if err := app.Dao().SaveRecord(relay); err != nil {
+			return err
+		}
+	}
+	return c.String(http.StatusOK, "OK")
+}
+
+func handleCancelSubscription(c echo.Context) error {
+	info := apis.RequestInfo(c)
+	user := info.AuthRecord
+
+	var req struct {
+		SubscriptionID string `json:"subscriptionId"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+	}
+
+	subscription_record, err := app.Dao().FindRecordById("subscriptions", req.SubscriptionID)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "Subscription not found"})
+	}
+
+	if subscription_record.GetString("user") != user.Id {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "Not authorized to cancel this subscription"})
+	}
+
+	stripeSubscriptionID := subscription_record.GetString("stripe_subscription")
+
+	stripeSubscription, err := subscription.Cancel(stripeSubscriptionID, nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to cancel subscription"})
+	}
+
+	// Update subscription record
+	subscription_record.Set("active", false)
+	subscription_record.Set("stripe_cancel_at", stripeSubscription.CanceledAt)
+	if err := app.Dao().SaveRecord(subscription_record); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update subscription_record record"})
+	}
+
+	// Expand the subscription_record record to include related data if needed
+	if err := app.Dao().ExpandRecord(subscription_record, []string{"user", "relay"}, nil); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to expand subscription_record record"})
+	}
+
+	// Return the updated subscription_record object
+	return c.JSON(http.StatusOK, subscription_record)
 }

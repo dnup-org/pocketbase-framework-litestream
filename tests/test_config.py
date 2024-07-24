@@ -145,7 +145,17 @@ def relay_with_member(user_session, relay, member, member_role):
     jp(resp)
     yield relay
     resp = user_session.delete(f"{base_url}/api/collections/relays/records/{relay}")
- 
+
+
+@pytest.fixture
+def subscription(user_auth_record, user_session, relay):
+    subscription_payload = {"active": True, "relay": relay, "user": user_auth_record["id"]}
+    resp = user_session.post(f"{base_url}/api/collections/subscriptions/records/", json=subscription_payload)
+    jp(rsep)
+    subscription_id = resp.json()["id"]
+    yield subscription_id
+    user_session.delete(f"{base_url}/api/collections/subscriptions/records/{subscription_id}")
+
 
 def test_admin_session(admin_session, user):
     resp = admin_session.get(f"{base_url}/api/collections/users/records/{user}?expand=user_settings_via_user.openai_apikey,user_settings_via_user.anthropic_apikey,subscriptions_via_user")
@@ -184,7 +194,7 @@ def test_user_read_self(user_session, user):
     resp = user_session.get(f"{base_url}/api/collections/users/records/{user}?expand=user_settings_via_user.openai_apikey,user_settings_via_user.anthropic_apikey,subscriptions_via_user")
     d = jp(resp)
     assert resp.status_code == 200
-    assert "user_settings" not in d["expand"]
+    assert "user_settings" not in d.get("expand", {})
 
 def test_user_read_other(user_session, stranger):
     expect("we can't access other guy")
@@ -313,3 +323,12 @@ def test_oauth_data(user_auth_record, user_session):
     )
     assert resp.json()["name"] == "Strong Bad"
     assert resp.json()["picture"] == picture
+
+
+def test_get_subscriptions_by_relay(user_session, relay):
+    resp = user_session.get(
+        f'{base_url}/api/collections/subscriptions/records?filter=relay="{relay}"'
+    )
+    resp.status_code == 200
+    assert len(resp.json())
+ 
