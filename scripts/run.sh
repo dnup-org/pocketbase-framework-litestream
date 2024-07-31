@@ -8,7 +8,7 @@ if [ -f /usr/local/bin/pb_data/data.db ]; then
   echo "Database already exists, skipping restore"
 else
   echo "No database found, restoring from replica if exists"
-  litestream restore -v -if-replica-exists -o /usr/local/bin/pb_data/data.db "${REPLICA_URL}"
+  litestream restore -v -if-replica-exists -o /usr/local/bin/pb_data/data.db /usr/local/bin/pb_data/data.db
 fi
 
 touch .env  # XXX this is required until we remove godotenv

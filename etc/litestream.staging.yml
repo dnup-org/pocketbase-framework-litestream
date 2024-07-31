@@ -1,0 +1,7 @@
+dbs:
+  # use the directory our binary is in to properly replicate and restore
+  - path: /usr/local/bin/pb_data/data.db
+    replicas:
+      - type: s3
+        endpoint: https://7c30de076e6720bfa818e34d382d8f38.r2.cloudflarestorage.com/
+        bucket: pocketbase-staging

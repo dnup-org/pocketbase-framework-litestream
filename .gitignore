@@ -1,4 +1,5 @@
 .auth.env
+.auth.staging.env
 __pycache__/
 *.pyc
 venv

@@ -1,0 +1,29 @@
+# fly.toml file generated for easy copying into your project
+
+app = "tf-pocketbase-staging"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  dockerfile = "./Dockerfile.staging"
+
+[mounts]
+  source = "pb_data_staging"  # Volume name
+  destination = "/usr/local/bin/pb_data"   # Mount point in the app
+
+[experimental]
+  allowed_public_ports = []
+  auto_rollback = true
+  max_per_region = 1  # Important! Otherwise you risk data corruption...
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 500
+    hard_limit = 550
