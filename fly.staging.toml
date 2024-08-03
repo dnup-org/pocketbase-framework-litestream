@@ -12,18 +12,24 @@ kill_timeout = 5
   destination = "/usr/local/bin/pb_data"   # Mount point in the app
 
 [experimental]
-  allowed_public_ports = []
   auto_rollback = true
   max_per_region = 1  # Important! Otherwise you risk data corruption...
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false
-  auto_start_machines = false
-  min_machines_running = 1
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.http_options]
+    h2_backend = true
 
   [http_service.concurrency]
-    type = "requests"
-    soft_limit = 500
+    type = "connections"
     hard_limit = 550
+    soft_limit = 500
+
+[metrics]
+  port = 9090
+  path = "/metrics"

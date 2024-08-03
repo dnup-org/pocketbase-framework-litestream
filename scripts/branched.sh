@@ -12,4 +12,4 @@ else
   litestream restore -v -if-replica-exists -o /usr/local/bin/pb_data/data.db /usr/local/bin/pb_data/data.db
 fi
 
-exec /usr/local/bin/app --hooksDir=/usr/local/bin/pb_hooks --dev serve --http 0.0.0.0:8080
+exec /usr/local/bin/app --hooksDir=/usr/local/bin/pb_hooks --dev serve_h2c --http 0.0.0.0:8080

@@ -30,6 +30,8 @@ import (
 	"github.com/stripe/stripe-go/v76"
 	"github.com/stripe/stripe-go/v76/subscription"
 	"github.com/stripe/stripe-go/v76/webhook"
+
+	"backend/myh2c"
 )
 
 type OAuthResponse struct {
@@ -46,6 +48,24 @@ func init() {
 	STRIPE_WEBHOOK_SECRET = os.Getenv("STRIPE_WEBHOOK_SECRET")
 	DOMAIN_NAME = os.Getenv("DOMAIN_NAME")
 	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
+}
+
+func logMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		req := c.Request()
+		fmt.Printf("Method: %s\n", req.Method)
+		fmt.Printf("URL: %s\n", req.URL)
+		fmt.Printf("Protocol: %s\n", req.Proto)
+		fmt.Println("Headers:")
+		for name, headers := range req.Header {
+			for _, h := range headers {
+				fmt.Printf("  %v: %v\n", name, h)
+			}
+		}
+		fmt.Println("---")
+
+		return next(c)
+	}
 }
 
 var app *pocketbase.PocketBase
@@ -107,6 +127,8 @@ func main() {
 		"enable/disable auto migrations",
 	)
 
+	app.RootCmd.AddCommand(myh2c.NewServeH2CCommand(app, true))
+
 	app.RootCmd.ParseFlags(os.Args[1:])
 
 	// load jsvm (hooks and migrations)
@@ -121,6 +143,7 @@ func main() {
 
 		// Load auth state from cookie
 		e.Router.Use(appHandler.LoadAuthContextFromCookie())
+		e.Router.Use(logMiddleware)
 
 		e.Router.POST("/webhook", WebhookHandler)
 		e.Router.POST("/api/cancel-subscription", handleCancelSubscription, handler.AuthGuard)

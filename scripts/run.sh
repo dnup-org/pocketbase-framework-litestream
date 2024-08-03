@@ -11,7 +11,5 @@ else
   litestream restore -v -if-replica-exists -o /usr/local/bin/pb_data/data.db /usr/local/bin/pb_data/data.db
 fi
 
-touch .env  # XXX this is required until we remove godotenv
 # Run litestream with your app as the subprocess.
-# Use port 8080 for deploying to Fly.io, GCP Cloud Run, or AWS App Runner easily.
-exec litestream replicate -exec "/usr/local/bin/app serve --http 0.0.0.0:8080"
+exec litestream replicate -exec "/usr/local/bin/app serve_h2c --http 0.0.0.0:8080"

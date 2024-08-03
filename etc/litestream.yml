@@ -4,3 +4,4 @@ dbs:
     replicas:
       - url: s3://tf-pocketbase/pb_data/
         type: s3
+        region: us-west-1
