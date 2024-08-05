@@ -31,6 +31,9 @@ import (
 	"github.com/stripe/stripe-go/v76/subscription"
 	"github.com/stripe/stripe-go/v76/webhook"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"backend/myh2c"
 )
 
@@ -48,7 +51,18 @@ func init() {
 	STRIPE_WEBHOOK_SECRET = os.Getenv("STRIPE_WEBHOOK_SECRET")
 	DOMAIN_NAME = os.Getenv("DOMAIN_NAME")
 	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
+	prometheus.MustRegister(httpRequestsTotal)
 }
+
+var (
+	httpRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total number of HTTP requests",
+		},
+		[]string{"method", "endpoint"},
+	)
+)
 
 func logMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -138,6 +152,17 @@ func main() {
 		HooksWatch:    hooksWatch,
 		HooksPoolSize: hooksPool,
 	})
+
+	go func() {
+		metricsServer := &http.Server{
+			Addr:    ":9091",
+			Handler: promhttp.Handler(),
+		}
+		log.Printf("Starting metrics server on :9091")
+		if err := metricsServer.ListenAndServe(); err != nil {
+			log.Printf("Metrics server error: %v", err)
+		}
+	}()
 
 	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
 
