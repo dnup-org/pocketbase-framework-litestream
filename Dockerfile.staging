@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download && go mod verify
 COPY main.go ./
 COPY handler /usr/src/app/handler
 COPY myh2c /usr/src/app/myh2c
+COPY redirect /usr/src/app/redirect
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     go build -v -o /usr/local/bin/app

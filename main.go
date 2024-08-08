@@ -35,6 +35,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"backend/myh2c"
+	"backend/redirect"
 )
 
 type OAuthResponse struct {
@@ -73,6 +74,10 @@ func logMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		fmt.Println("Headers:")
 		for name, headers := range req.Header {
 			for _, h := range headers {
+				if name == "Authorization" {
+					fmt.Printf("  %v: %v\n", name, "**************")
+					continue
+				}
 				fmt.Printf("  %v: %v\n", name, h)
 			}
 		}
@@ -165,6 +170,9 @@ func main() {
 	}()
 
 	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
+
+		group := e.Router.Group("/api")
+		redirect.BindRecordAuthApi(app, group)
 
 		// Load auth state from cookie
 		e.Router.Use(appHandler.LoadAuthContextFromCookie())
@@ -364,6 +372,19 @@ func main() {
 		}
 
 		return nil
+	})
+
+	app.OnRecordBeforeCreateRequest("code_exchange").Add(func(e *core.RecordCreateEvent) error {
+
+		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		if admin != nil {
+			return nil // ignore for admins
+		}
+
+		e.Record.Set("code", 0)
+		e.Record.Set("state", "")
+		return nil
+
 	})
 
 	app.OnRecordAfterCreateRequest("relays").Add(func(e *core.RecordCreateEvent) error {
