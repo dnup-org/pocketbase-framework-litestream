@@ -104,16 +104,6 @@ func ServeH2C(app core.App, config ServeConfig) error {
 		IdleTimeout:          10 * time.Second,
 	}
 
-	// Add logging middleware to the Echo router
-	router.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			req := c.Request()
-			log.Printf("Received request: %s %s", req.Method, req.URL.Path)
-			log.Printf("Headers: %v", req.Header)
-			return next(c)
-		}
-	})
-
 	// Create the h2c handler using the Echo router
 	h2cHandler := h2c.NewHandler(router, h2s)
 
