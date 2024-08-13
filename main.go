@@ -36,11 +36,14 @@ import (
 
 	"backend/myh2c"
 	"backend/redirect"
+
+	"github.com/google/uuid"
 )
 
 type OAuthResponse struct {
-	Name    string `json:"name"`
-	Picture string `json:"picture"`
+	Name      string `json:"name"`
+	GivenName string `json:"given_name"`
+	Picture   string `json:"picture"`
 }
 
 var STRIPE_WEBHOOK_SECRET string
@@ -89,6 +92,37 @@ func logMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 var app *pocketbase.PocketBase
 
+var babbler = babble.NewBabbler()
+
+func createInvitation(relayId string) error {
+	member_role, err := app.Dao().FindFirstRecordByData("roles", "name", "Member")
+	if err != nil {
+		return fmt.Errorf("error finding role: %v", err)
+	}
+
+	relay_invitations_collection, err := app.Dao().FindCollectionByNameOrId("relay_invitations")
+	if err != nil {
+		return err
+	}
+
+	relay_invitation := models.NewRecord(relay_invitations_collection)
+	relay_invitation.Set("relay", relayId)
+	relay_invitation.Set("role", member_role.Id)
+
+	babbler.Count = 3
+	key := babbler.Babble()
+	key = strings.Replace(key, "'s", "", -1)
+	key = strings.Replace(key, "'", "", -1)
+	key = strings.ToLower(key)
+
+	relay_invitation.Set("key", key)
+
+	if err := app.Dao().SaveRecord(relay_invitation); err != nil {
+		return err
+	}
+	return nil
+}
+
 func main() {
 
 	app = pocketbase.New()
@@ -103,9 +137,6 @@ func main() {
 	})
 
 	appHandler := &handler.AppHandler{App: app}
-	babbler := babble.NewBabbler()
-	babbler.Count = 3
-
 	var hooksDir string
 	app.RootCmd.PersistentFlags().StringVar(
 		&hooksDir,
@@ -277,12 +308,68 @@ func main() {
 			return err
 		}
 
+		oauth2_response_collection, err := app.Dao().FindCollectionByNameOrId("oauth2_response")
+		if err != nil {
+			return err
+		}
+
+		var total int
+		err = app.Dao().RecordQuery(oauth2_response_collection).
+			Select("count(*)").
+			AndWhere(dbx.HashExp{"user": user_record.Id}).
+			Row(&total)
+
+		if err != nil || total == 0 {
+			relay_collection, err := app.Dao().FindCollectionByNameOrId("relays")
+			if err != nil {
+				return err
+			}
+			relay_record := models.NewRecord(relay_collection)
+			form := forms.NewRecordUpsert(app, relay_record)
+
+			form.LoadData(map[string]any{
+				"name":       oauth_response.GivenName + "'s Relay",
+				"guid":       uuid.New().String(),
+				"creator":    user_record.Id,
+				"user_limit": FREE_USER_LIMIT,
+			})
+
+			if err := form.Submit(); err != nil {
+				return err
+			}
+
+			owner_role, err := app.Dao().FindFirstRecordByData("roles", "name", "Owner")
+			if err != nil {
+				return fmt.Errorf("error finding role: %v", err)
+			}
+
+			relay_roles_collection, err := app.Dao().FindCollectionByNameOrId("relay_roles")
+			if err != nil {
+				return err
+			}
+
+			relay_role := models.NewRecord(relay_roles_collection)
+			relay_role.Set("relay", relay_record.Id)
+			relay_role.Set("user", user_record.Id)
+			relay_role.Set("role", owner_role.Id)
+
+			if err := app.Dao().SaveRecord(relay_role); err != nil {
+				return err
+			}
+
+			createInvitation(relay_record.Id)
+
+		}
+
 		user_record.Set("name", oauth_response.Name)
 		user_record.Set("picture", oauth_response.Picture)
 
 		if err := app.Dao().SaveRecord(user_record); err != nil {
 			return err
 		}
+
+		e.Record.Set("user", user_record.Id)
+
 		return nil
 	})
 
@@ -394,31 +481,7 @@ func main() {
 			return nil // ignore for admins
 		}
 
-		member_role, err := app.Dao().FindFirstRecordByData("roles", "name", "Member")
-		if err != nil {
-			return fmt.Errorf("error finding role: %v", err)
-		}
-
-		relay_invitations_collection, err := app.Dao().FindCollectionByNameOrId("relay_invitations")
-		if err != nil {
-			return err
-		}
-
-		relay_invitation := models.NewRecord(relay_invitations_collection)
-		relay_invitation.Set("relay", e.Record.Id)
-		relay_invitation.Set("role", member_role.Id)
-
-		key := babbler.Babble()
-		key = strings.Replace(key, "'s", "", -1)
-		key = strings.Replace(key, "'", "", -1)
-		key = strings.ToLower(key)
-
-		relay_invitation.Set("key", key)
-
-		if err := app.Dao().SaveRecord(relay_invitation); err != nil {
-			return err
-		}
-
+		createInvitation(e.Record.Id)
 		return nil
 	})
 
