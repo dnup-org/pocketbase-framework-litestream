@@ -52,6 +52,8 @@ var STRIPE_WEBHOOK_SECRET string
 var DOMAIN_NAME string
 
 const FREE_USER_LIMIT = 3
+const RELAY_DEFAULT_CTA = "Upgrade to 10 users for $10/month."
+const RELAY_DEFAULT_PLAN = "Free (3 users)"
 
 func init() {
 	STRIPE_WEBHOOK_SECRET = os.Getenv("STRIPE_WEBHOOK_SECRET")
@@ -373,6 +375,8 @@ func main() {
 				"guid":       uuid.New().String(),
 				"creator":    user_record.Id,
 				"user_limit": FREE_USER_LIMIT,
+				"plan":       RELAY_DEFAULT_PLAN,
+				"cta":        RELAY_DEFAULT_CTA,
 			})
 
 			if err := form.Submit(); err != nil {
@@ -446,6 +450,8 @@ func main() {
 		// Set Defaults
 		e.Record.Set("user_limit", FREE_USER_LIMIT)
 		e.Record.Set("creator", user_record.Id)
+		e.Record.Set("plan", RELAY_DEFAULT_PLAN)
+		e.Record.Set("cta", RELAY_DEFAULT_CTA)
 		return nil
 	})
 
@@ -636,6 +642,8 @@ func WebhookHandler(c echo.Context) error {
 		}
 
 		relay.Set("user_limit", quantity)
+		relay.Set("plan", "Relay for Teams")
+		relay.Set("cta", "Thank you for supporting Relay <3")
 		if err := app.App.Dao().SaveRecord(relay); err != nil {
 			return err
 		}
@@ -694,6 +702,8 @@ func WebhookHandler(c echo.Context) error {
 			return err
 		}
 		relay.Set("user_limit", FREE_USER_LIMIT)
+		relay.Set("plan", RELAY_DEFAULT_PLAN)
+		relay.Set("cta", RELAY_DEFAULT_CTA)
 		if err := app.Dao().SaveRecord(relay); err != nil {
 			return err
 		}
