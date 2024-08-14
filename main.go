@@ -13,6 +13,7 @@ import (
 	"io"
 	"strconv"
 
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
@@ -21,6 +22,7 @@ import (
 	"github.com/pocketbase/pocketbase/models"
 	"github.com/pocketbase/pocketbase/plugins/jsvm"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
+	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/tjarratt/babble"
@@ -237,6 +239,45 @@ func main() {
 		// System Statistics
 		e.Router.GET("/stats/cpu", getCPUStats)
 		e.Router.GET("/stats/ram", getRAMStats)
+
+		e.Router.POST("/admin/verify", func(c echo.Context) error {
+			admin, _ := c.Get(apis.ContextAdminKey).(*models.Admin)
+			if admin == nil {
+				return echo.NewHTTPError(http.StatusNotFound)
+			}
+			var input struct {
+				Token string `json:"token"`
+			}
+			if err := c.Bind(&input); err != nil {
+				return c.JSON(400, map[string]string{"error": "Invalid signature: Could not read request"})
+			}
+
+			claims, err := security.ParseUnverifiedJWT(input.Token)
+			if err != nil {
+				return c.JSON(400, map[string]string{"error": "Invalid signature: Could not parse unverified claims"})
+			}
+
+			getClaimValue := func(claims map[string]interface{}, key string) (string, bool) {
+				value, exists := claims[key]
+				strValue, ok := value.(string)
+				return strValue, exists && ok
+			}
+
+			collectionName, _ := getClaimValue(claims, "collectionName")
+			recordId, _ := getClaimValue(claims, "id")
+
+			record, err := app.Dao().FindRecordById(collectionName, recordId)
+			if err != nil {
+				return c.JSON(400, map[string]string{"error": "Invalid signature: Record not found"})
+			}
+
+			record_token := record.GetString("token")
+			verified_claims, err := security.ParseJWT(input.Token, record_token)
+			if err != nil {
+				return c.JSON(400, map[string]string{"error": "Invalid signature: Could not verify claims"})
+			}
+			return c.JSON(200, verified_claims)
+		})
 
 		e.Router.POST("/api/accept-invitation", func(c echo.Context) error {
 			info := apis.RequestInfo(c)
@@ -498,6 +539,52 @@ func main() {
 		return nil
 	})
 
+	generateRecordJWT := func(app core.App, record *models.Record) (string, error) {
+
+		return security.NewJWT(
+			jwt.MapClaims{
+				"type":           "record_access",
+				"id":             record.Id,
+				"collectionName": record.Collection().Name,
+			},
+			(record.GetString("token")),
+			60*60*24,
+		)
+	}
+
+	withToken := func(record *models.Record) error {
+		if record.Collection().Name == "subscriptions" {
+			// Add a computed field
+			token, err := generateRecordJWT(app, record)
+			if err != nil {
+				return err
+			}
+			record.Set("token", token)
+		}
+		return nil
+	}
+
+	app.OnRecordViewRequest("subscriptions").Add(func(e *core.RecordViewEvent) error {
+		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		if admin != nil {
+			return nil // ignore for admins
+		}
+		withToken(e.Record)
+		return nil
+	})
+
+	app.OnRecordsListRequest("subscriptions").Add(func(e *core.RecordsListEvent) error {
+		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
+		if admin != nil {
+			return nil // ignore for admins
+		}
+
+		for _, record := range e.Records {
+			withToken(record)
+		}
+		return nil
+	})
+
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
 	}
@@ -571,6 +658,7 @@ func WebhookHandler(c echo.Context) error {
 		record.Set("stripe_quantity", quantity)
 		record.Set("stripe_customer", event.Data.Object["customer"])
 		record.Set("stripe_subscription", event.Data.Object["subscription"])
+		record.Set("token", babbler.Babble())
 		app.Dao().SaveRecord(record)
 	} else if event.Type == "customer.subscription.updated" {
 		subscription, err := app.Dao().FindFirstRecordByData("subscriptions", "stripe_subscription", event.Data.Object["id"])
