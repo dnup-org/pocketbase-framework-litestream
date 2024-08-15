@@ -30,7 +30,6 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/stripe/stripe-go/v76"
-	"github.com/stripe/stripe-go/v76/subscription"
 	"github.com/stripe/stripe-go/v76/webhook"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -50,6 +49,7 @@ type OAuthResponse struct {
 
 var STRIPE_WEBHOOK_SECRET string
 var DOMAIN_NAME string
+var WEB_JWT_SECRET string
 
 const FREE_USER_LIMIT = 3
 const RELAY_DEFAULT_CTA = "Upgrade to 10 users for $10/month."
@@ -58,6 +58,7 @@ const RELAY_DEFAULT_PLAN = "Free (3 users)"
 func init() {
 	STRIPE_WEBHOOK_SECRET = os.Getenv("STRIPE_WEBHOOK_SECRET")
 	DOMAIN_NAME = os.Getenv("DOMAIN_NAME")
+	WEB_JWT_SECRET = os.Getenv("WEB_JWT_SECRET")
 	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
 	prometheus.MustRegister(httpRequestsTotal)
 }
@@ -98,6 +99,15 @@ var app *pocketbase.PocketBase
 
 var babbler = babble.NewBabbler()
 
+func generateKey() string {
+	babbler.Count = 3
+	key := babbler.Babble()
+	key = strings.Replace(key, "'s", "", -1)
+	key = strings.Replace(key, "'", "", -1)
+	key = strings.ToLower(key)
+	return key
+}
+
 func createInvitation(relayId string) error {
 	member_role, err := app.Dao().FindFirstRecordByData("roles", "name", "Member")
 	if err != nil {
@@ -112,14 +122,7 @@ func createInvitation(relayId string) error {
 	relay_invitation := models.NewRecord(relay_invitations_collection)
 	relay_invitation.Set("relay", relayId)
 	relay_invitation.Set("role", member_role.Id)
-
-	babbler.Count = 3
-	key := babbler.Babble()
-	key = strings.Replace(key, "'s", "", -1)
-	key = strings.Replace(key, "'", "", -1)
-	key = strings.ToLower(key)
-
-	relay_invitation.Set("key", key)
+	relay_invitation.Set("key", generateKey())
 
 	if err := app.Dao().SaveRecord(relay_invitation); err != nil {
 		return err
@@ -211,37 +214,18 @@ func main() {
 
 		// Load auth state from cookie
 		e.Router.Use(appHandler.LoadAuthContextFromCookie())
+
+		e.Router.Use(apis.ActivityLogger(app))
 		e.Router.Use(logMiddleware)
 
+		// Stripe Webhook
 		e.Router.POST("/webhook", WebhookHandler)
-		e.Router.POST("/api/cancel-subscription", handleCancelSubscription, handler.AuthGuard)
-
-		// Pay protected files
-		e.Router.GET("/content/:file", func(c echo.Context) error {
-			fileName := c.PathParam("file")
-			filePath := "./content/" + fileName
-			return c.File(filePath)
-		}, handler.PaidGuard)
-
-		// Static files
-		e.Router.GET("/public/*", apis.StaticDirectoryHandler(os.DirFS("/usr/local/bin/pb_public"), false))
-
-		// Doc Views
-		e.Router.GET("/docs/:doc", handler.RenderDocViewHandler("./public/docs/"))
-
-		// Template Views
-		e.Router.GET("/", handler.RenderViewHandler("./public/views/index.html", nil))
-		e.Router.GET("/get", handler.RenderViewHandler("./public/views/get.html", nil))
-		e.Router.GET("/login", handler.RenderViewHandler("./public/views/login.html", nil))
-		e.Router.GET("/signup", handler.RenderViewHandler("./public/views/signup.html", nil))
-		e.Router.GET("/reset", handler.RenderViewHandler("./public/views/reset.html", nil))
-		e.Router.GET("/dashboard", handler.RenderViewHandler("./public/views/dashboard.html", nil))
-		e.Router.GET("/app", handler.RenderViewHandler("./public/views/app.html", nil), handler.PaidGuard)
 
 		// System Statistics
 		e.Router.GET("/stats/cpu", getCPUStats)
 		e.Router.GET("/stats/ram", getRAMStats)
 
+		// Token Verification
 		e.Router.POST("/admin/verify", func(c echo.Context) error {
 			admin, _ := c.Get(apis.ContextAdminKey).(*models.Admin)
 			if admin == nil {
@@ -279,7 +263,7 @@ func main() {
 				return c.JSON(400, map[string]string{"error": "Invalid signature: Could not verify claims"})
 			}
 			return c.JSON(200, verified_claims)
-		})
+		}, apis.RequireAdminAuth())
 
 		e.Router.POST("/api/accept-invitation", func(c echo.Context) error {
 			info := apis.RequestInfo(c)
@@ -332,7 +316,7 @@ func main() {
 			}
 
 			return c.JSON(http.StatusOK, relay)
-		}, handler.AuthGuard)
+		}, apis.RequireRecordAuth("users"))
 
 		return nil
 	})
@@ -545,15 +529,18 @@ func main() {
 		return nil
 	})
 
-	generateRecordJWT := func(app core.App, record *models.Record) (string, error) {
+	//////////////////////////////
+	// Subscription Record Auth //
+	//////////////////////////////
+	generateRecordJWT := func(app core.App, recordId string, collectionName string, token string) (string, error) {
 
 		return security.NewJWT(
 			jwt.MapClaims{
 				"type":           "record_access",
-				"id":             record.Id,
-				"collectionName": record.Collection().Name,
+				"id":             recordId,
+				"collectionName": collectionName,
 			},
-			(record.GetString("token")),
+			token,
 			60*60*24,
 		)
 	}
@@ -561,7 +548,7 @@ func main() {
 	withToken := func(record *models.Record) error {
 		if record.Collection().Name == "subscriptions" {
 			// Add a computed field
-			token, err := generateRecordJWT(app, record)
+			token, err := generateRecordJWT(app, record.Id, record.Collection().Name, WEB_JWT_SECRET)
 			if err != nil {
 				return err
 			}
@@ -570,6 +557,7 @@ func main() {
 		return nil
 	}
 
+	// encode token on view
 	app.OnRecordViewRequest("subscriptions").Add(func(e *core.RecordViewEvent) error {
 		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
 		if admin != nil {
@@ -579,6 +567,7 @@ func main() {
 		return nil
 	})
 
+	// encode token when listing
 	app.OnRecordsListRequest("subscriptions").Add(func(e *core.RecordsListEvent) error {
 		admin, _ := e.HttpContext.Get(apis.ContextAdminKey).(*models.Admin)
 		if admin != nil {
@@ -588,6 +577,65 @@ func main() {
 		for _, record := range e.Records {
 			withToken(record)
 		}
+		return nil
+	})
+
+	// encode token in subscriptions
+	app.OnRealtimeBeforeMessageSend().Add(func(e *core.RealtimeMessageEvent) error {
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(e.Message.Data), &payload); err != nil {
+			return err
+		}
+
+		var processPayload func(interface{}) (interface{}, error)
+		processPayload = func(data interface{}) (interface{}, error) {
+			switch v := data.(type) {
+			case map[string]interface{}:
+				if collection, ok := v["collectionName"].(string); ok && collection == "subscriptions" {
+					if token, ok := v["token"].(string); ok {
+						encodedToken, err := generateRecordJWT(app, v["id"].(string), collection, token)
+						if err != nil {
+							return nil, err
+						}
+						v["token"] = encodedToken
+					}
+				}
+				for key, value := range v {
+					processed, err := processPayload(value)
+					if err != nil {
+						return nil, err
+					}
+					v[key] = processed
+				}
+				return v, nil
+			case []interface{}:
+				for i, item := range v {
+					processed, err := processPayload(item)
+					if err != nil {
+						return nil, err
+					}
+					v[i] = processed
+				}
+				return v, nil
+			default:
+				return v, nil
+			}
+		}
+
+		processedPayload, err := processPayload(payload)
+		if err != nil {
+			return err
+		}
+
+		// Update the message with the processed payload
+		updatedMessage, err := json.Marshal(processedPayload)
+		if err != nil {
+			return err
+		}
+		e.Message.Data = updatedMessage
+
+		app.Logger().Debug("Realtime Message Sent", "event", e)
+
 		return nil
 	})
 
@@ -666,7 +714,6 @@ func WebhookHandler(c echo.Context) error {
 		record.Set("stripe_quantity", quantity)
 		record.Set("stripe_customer", event.Data.Object["customer"])
 		record.Set("stripe_subscription", event.Data.Object["subscription"])
-		record.Set("token", babbler.Babble())
 		app.Dao().SaveRecord(record)
 	} else if event.Type == "customer.subscription.updated" {
 		subscription, err := app.Dao().FindFirstRecordByData("subscriptions", "stripe_subscription", event.Data.Object["id"])
@@ -709,47 +756,4 @@ func WebhookHandler(c echo.Context) error {
 		}
 	}
 	return c.String(http.StatusOK, "OK")
-}
-
-func handleCancelSubscription(c echo.Context) error {
-	info := apis.RequestInfo(c)
-	user := info.AuthRecord
-
-	var req struct {
-		SubscriptionID string `json:"subscriptionId"`
-	}
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
-	}
-
-	subscription_record, err := app.Dao().FindRecordById("subscriptions", req.SubscriptionID)
-	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "Subscription not found"})
-	}
-
-	if subscription_record.GetString("user") != user.Id {
-		return c.JSON(http.StatusForbidden, map[string]string{"error": "Not authorized to cancel this subscription"})
-	}
-
-	stripeSubscriptionID := subscription_record.GetString("stripe_subscription")
-
-	stripeSubscription, err := subscription.Cancel(stripeSubscriptionID, nil)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to cancel subscription"})
-	}
-
-	// Update subscription record
-	subscription_record.Set("active", false)
-	subscription_record.Set("stripe_cancel_at", stripeSubscription.CanceledAt)
-	if err := app.Dao().SaveRecord(subscription_record); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update subscription_record record"})
-	}
-
-	// Expand the subscription_record record to include related data if needed
-	if err := app.Dao().ExpandRecord(subscription_record, []string{"user", "relay"}, nil); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to expand subscription_record record"})
-	}
-
-	// Return the updated subscription_record object
-	return c.JSON(http.StatusOK, subscription_record)
 }
