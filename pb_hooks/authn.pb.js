@@ -7,6 +7,6 @@ routerAdd("POST", "/authn", (c) => {
     c.bind(data)
 
     const record = $app.dao().findAuthRecordByToken(data.token, $app.settings().recordAuthToken.secret)
-    $app.dao().expandRecord(record, ["user_settings_via_user.openai_apikey", "user_settings_via_user.anthropic_apikey", "relay_roles_via_user", "relay_roles_via_user.relay", "relay_roles_via_user.role"], null)
+    $app.dao().expandRecord(record, ["user_settings_via_user.openai_apikey", "user_settings_via_user.anthropic_apikey", "relay_roles_via_user", "relay_roles_via_user.relay", "relay_roles_via_user.role", "relay_roles_via_user.relay.provider"], null)
     return $apis.recordAuthResponse($app, c, record, null);
 }, $apis.requireAdminAuth())
